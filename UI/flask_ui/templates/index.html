@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .metric-card {
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            padding: 1rem;
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.02);
+        }
+        .metric-label {
+            font-size: 0.875rem;
+            color: #6c757d;
+            margin-bottom: 0.25rem;
+        }
+        .metric-value {
+            font-size: 1.75rem;
+            font-weight: 600;
+        }
+        .candidate-card {
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .json-display {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 0.25rem;
+            padding: 1rem;
+            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.875rem;
+            flex-grow: 1;
+        }
+        .btn-streamlit-primary {
+            background-color: #ff4b4b;
+            border-color: #ff4b4b;
+            color: white;
+            font-weight: 500;
+        }
+        .btn-streamlit-primary:hover {
+            background-color: #e03e3e;
+            border-color: #e03e3e;
+            color: white;
+        }
+    </style>
+</head>
+<body class="py-4">
+    <div class="container-fluid max-w-7xl px-4" style="max-width: 1400px; margin: 0 auto;">
+        
+        <div class="row align-items-center mb-3">
+            <div class="col-md-10">
+                <h1 class="fw-bold mb-0">{{ app_icon }} {{ app_title }}</h1>
+                <p class="text-muted mb-0">{{ main_subtitle }}</p>
+            </div>
+            <div class="col-md-2 text-end">
+                <form action="/action" method="POST">
+                    <button type="submit" name="action" value="reset" class="btn btn-streamlit-primary w-100 py-2">
+                        Reset
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <hr class="mb-4">
+
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+                <div class="metric-card">
+                    <div class="metric-label">Current Iteration</div>
+                    <div class="metric-value">#{{ iteration }}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="metric-card">
+                    <div class="metric-label">Metric 1</div>
+                    <div class="metric-value">{{ metrics['Metric 1'] }}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="metric-card">
+                    <div class="metric-label">Metric 2</div>
+                    <div class="metric-value">{{ metrics['Metric 2'] }}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="metric-card">
+                    <div class="metric-label">Metric 3</div>
+                    <div class="metric-value">{{ metrics['Metric 3'] }}</div>
+                </div>
+            </div>
+        </div>
+
+        <hr class="mb-4">
+
+        <div class="mb-4">
+            <h3 class="fw-bold">Select Preferred Option</h3>
+            <p class="text-muted">Evaluate the two candidates below and choose the preferred option.</p>
+        </div>
+
+        <form action="/action" method="POST">
+            <div class="row g-4 mb-4 align-items-stretch">
+                <div class="col-md-5">
+                    <div class="candidate-card">
+                        <h4 class="mb-3">Candidate A</h4>
+                        <pre class="json-display mb-4">{{ candidate_a | tojson(indent=2) }}</pre>
+                        <button type="submit" name="action" value="select_a" class="btn btn-outline-dark w-100 py-2">
+                            Select
+                        </button>
+                    </div>
+                </div>
+
+                <div class="col-md-2 d-none d-md-block"></div>
+
+                <div class="col-md-5">
+                    <div class="candidate-card">
+                        <h4 class="mb-3">Candidate B</h4>
+                        <pre class="json-display mb-4">{{ candidate_b | tojson(indent=2) }}</pre>
+                        <button type="submit" name="action" value="select_b" class="btn btn-outline-dark w-100 py-2">
+                            Select
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row justify-content-center mt-3">
+                <div class="col-md-4">
+                    <button type="submit" name="action" value="skip" class="btn btn-light border w-100 py-2">
+                        🤷 No Preference / Skip
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <hr class="my-5">
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
