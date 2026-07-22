@@ -7,6 +7,8 @@ from scipy.optimize import brentq
 from scipy.special import expit  # numerically stable sigmoid
 
 
+# Add a control group (no style) to measure the value add.
+
 class LearningAlgoTemplate:
 
     def __init__(self, vectors):
@@ -58,8 +60,7 @@ class MythosNonLinearAlgo:
     are pinned by the zero-mean prior, not by the data.
     """
 
-    def __init__(self, vectors, prior_std: float = 1.0,
-                 pool_size: int = 4096, seed: Optional[int] = None):
+    def __init__(self, vectors, past_scores, prior_std: float = 1.0, pool_size: int = 4096, seed: Optional[int] = None):
         # Complete 2D integer matrix
         self.population = np.asarray(vectors, dtype=int)
         if self.population.ndim != 2:
@@ -89,7 +90,10 @@ class MythosNonLinearAlgo:
         # Allocate a parallel 1D array of zeros
         # (posterior-mean utility of every population vector; kept in sync
         # with mu by update_score).
-        self.scores = self._phi @ self._mu
+        if past_scores == False:
+            self.scores = self._phi @ self._mu
+        else:
+            self.scores = past_scores
 
         # Parallel 1D array of score uncertainties: posterior std of each
         # vector's utility, sqrt(phi . Sigma . phi).  Shrinks as we learn.
@@ -101,7 +105,7 @@ class MythosNonLinearAlgo:
         self._pool_size = int(pool_size)
         self._rng = np.random.default_rng(seed)
 
-    def get_comparison(self, vectors, scores):
+    def get_comparison(self):
         """
         Select the comparison (a_vect, b_vect) that maximises information gain.
 
@@ -130,8 +134,7 @@ class MythosNonLinearAlgo:
         Small populations are searched exhaustively over all pairs;
         large ones via a random pool of `pool_size` sampled pairs.
         """
-        X = np.asarray(vectors, dtype=int)
-        scores = np.asarray(scores, dtype=float)
+        X = self.population
         n = len(X)
         if n < 2:
             raise ValueError("need at least two vectors to form a comparison")
@@ -161,17 +164,15 @@ class MythosNonLinearAlgo:
             d_mat = phi[i_idx] - phi[j_idx]
             v = np.einsum("kd,de,ke->k", d_mat, self._Sigma, d_mat)
 
-        m = scores[i_idx] - scores[j_idx]                  # predicted margins
+        m = self.scores[i_idx] - self.scores[j_idx]                  # predicted margins
         v = np.maximum(v, 0.0)
 
         # BALD expected information gain, in bits (closed form).
         p_hat = expit(m / np.sqrt(1.0 + np.pi * v / 8.0))
         p_hat = np.clip(p_hat, 1e-12, 1.0 - 1e-12)
-        marginal_entropy = -(p_hat * np.log2(p_hat)
-                             + (1.0 - p_hat) * np.log2(1.0 - p_hat))
+        marginal_entropy = -(p_hat * np.log2(p_hat) + (1.0 - p_hat) * np.log2(1.0 - p_hat))
         c2 = 4.0 * np.log(2.0)
-        expected_conditional_entropy = (np.sqrt(c2 / (c2 + v))
-                                        * np.exp(-(m ** 2) / (2.0 * (c2 + v))))
+        expected_conditional_entropy = (np.sqrt(c2 / (c2 + v)) * np.exp(-(m ** 2) / (2.0 * (c2 + v))))
         gains = marginal_entropy - expected_conditional_entropy
 
         best = int(np.argmax(gains))
@@ -296,8 +297,7 @@ class MythosLinearAlgo:
     meaningful.
     """
  
-    def __init__(self, vectors, prior_std: float = 1.0,
-                 pool_size: int = 4096, seed: Optional[int] = None):
+    def __init__(self, vectors, past_scores, prior_std: float = 1.0, pool_size: int = 4096, seed: Optional[int] = None):
         # Complete 2D integer matrix
         self.population = np.asarray(vectors, dtype=int)
         if self.population.ndim != 2:
@@ -320,7 +320,10 @@ class MythosLinearAlgo:
         # Allocate a parallel 1D array of zeros
         # (posterior-mean utility of every population vector; kept in sync
         # with mu by update_score).
-        self.scores = self._phi @ self._mu
+        if past_scores == False:
+            self.scores = self._phi @ self._mu
+        else:
+            self.scores = past_scores
  
         # Parallel 1D array of score uncertainties: posterior std of each
         # vector's utility, sqrt(x . Sigma . x).  Shrinks as we learn.
@@ -332,7 +335,7 @@ class MythosLinearAlgo:
         self._pool_size = int(pool_size)
         self._rng = np.random.default_rng(seed)
  
-    def get_comparison(self, vectors, scores):
+    def get_comparison(self):
         """
         Select the comparison (a_vect, b_vect) that maximises information gain.
  
@@ -364,8 +367,7 @@ class MythosLinearAlgo:
         Small populations are searched exhaustively over all pairs;
         large ones via a random pool of `pool_size` sampled pairs.
         """
-        X = np.asarray(vectors, dtype=int)
-        scores = np.asarray(scores, dtype=float)
+        X = self.population
         n = len(X)
         if n < 2:
             raise ValueError("need at least two vectors to form a comparison")
@@ -394,7 +396,7 @@ class MythosLinearAlgo:
             d_mat = phi[i_idx] - phi[j_idx]
             v = np.einsum("kd,de,ke->k", d_mat, self._Sigma, d_mat)
  
-        m = scores[i_idx] - scores[j_idx]                  # predicted margins
+        m = self.scores[i_idx] - self.scores[j_idx]                  # predicted margins
         v = np.maximum(v, 0.0)
  
         # BALD expected information gain, in bits (closed form).
@@ -514,7 +516,8 @@ class MythosLinearAlgo:
         order = np.argsort(-self.scores, kind="stable")
         return np.column_stack((self.population[order].astype(float),
                                 self.scores[order]))
- 
+
+# add save vector & scores function 
 
 if __name__ == "__main__":
     pass

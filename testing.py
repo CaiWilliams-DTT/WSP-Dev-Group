@@ -1,5 +1,16 @@
+import os
+import itertools
+import textwrap
+from typing import Any, Optional
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import brentq
+from scipy.special import expit  # numerically stable sigmoid
+
 from DIMENTIONS.input import StyleFeatureSpace
-from ALGO.pref_learn_algo import (MythosLinearAlgo, MythosNonLinearAlgo)
+from ALGO.pref_learn_algo import MythosLinearAlgo, MythosNonLinearAlgo
+from LLM_API.llm_api import get_llm, style_dict_to_guide
 
 
 def stylefeaturespace_test():
@@ -31,7 +42,7 @@ def stylefeaturespace_test():
     for row in feature_matrix[:3]:
         print(row)
 
-def algo_test():
+def algo_test_old():
     style_space = StyleFeatureSpace()
     feature_matrix = style_space.generate_feature_matrix(as_numpy=True)
 
@@ -113,5 +124,83 @@ def algo_test():
             print(f"   {dim:<{label_width}} : {val}")
 
 
+NEW_USER = True
+run = True
+
+
+def algo_test():
+
+    def print_comparison(a_response: str, b_response: str, round_num: int) -> None:
+        """Print the two responses side-by-side (sequentially) for comparison."""
+        
+        CLI_WIDTH = 100
+
+        print("=" * CLI_WIDTH)
+        print(f"Round {round_num}")
+        print("=" * CLI_WIDTH)
+
+        print("\nOPTION A")
+        print("-" * CLI_WIDTH)
+        print(textwrap.fill(a_response, width=CLI_WIDTH))
+
+        print("\nOPTION B")
+        print("-" * CLI_WIDTH)
+        print(textwrap.fill(b_response, width=CLI_WIDTH))
+
+        print("=" * CLI_WIDTH)
+
+    def get_user_preference() -> str:
+        """Prompt until the user enters a valid choice."""
+
+        while True:
+            choice = input("\nWhich response do you prefer? [A/B/Q]: ").strip().upper()
+
+            if choice in {"A", "B", "Q"}:
+                return choice
+
+            print("Invalid choice. Please enter A, B or Q.")
+    
+    style_space = StyleFeatureSpace()
+    round_num = 0
+
+    # Past user profile? (dropdown in UI -> create new profile setting)
+    # Generate vectorised feature matrix
+    if NEW_USER:
+        feature_matrix = style_space.generate_feature_matrix(as_numpy=True)
+        algo = MythosNonLinearAlgo(vectors=feature_matrix, past_scores=False)
+        
+    else:
+        # Load past profiles
+        # feature_matrix, user_scores = 
+        # algo = MythosNonLinearAlgo(vectors=feature_matrix, past_scores=user_scores)
+        pass
+
+    while run:
+        os.system("cls" if os.name == "nt" else "clear")
+
+        round_num += 1
+
+        a_vect, b_vect = algo.get_comparison()
+
+        a_styleguide = style_dict_to_guide(style_space.devectorize_profile(a_vect))
+        b_styleguide = style_dict_to_guide(style_space.devectorize_profile(b_vect))
+
+        a_resp = get_llm(a_styleguide)
+        b_resp = get_llm(b_styleguide)
+
+        print_comparison(a_resp, b_resp, round_num)
+
+        user_preference = get_user_preference()
+
+        if user_preference == "Q":
+            break
+
+        algo.update_score(a_vect, b_vect, user_preference)
+
+        
+
+
 if __name__ == '__main__':
+    # stylefeaturespace_test()
+    algo_test()
     pass

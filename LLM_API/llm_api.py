@@ -7,6 +7,7 @@ from groq import Groq
 # Multi Model?
 # Ask the LLM to re-write something (possibly user input) or prompt it   
 
+
 load_dotenv()
 API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -15,21 +16,50 @@ if not API_KEY:
 
 client = Groq(api_key=API_KEY)
 
-PROMPTS = [
-    "Write me an email [context] using the following writing style"
-]
+def style_dict_to_guide(style: dict) -> str:
+    """
+    Convert a writing style dictionary into a style guide string.
 
+    Parameters
+    ----------
+    style : dict
+        Dictionary containing writing style attributes.
 
-def get_groq(prompt_text, writing_style):
+    Returns
+    -------
+    str
+        A formatted writing style guide.
+    """
+    if not style:
+        return ""
+
+    lines = [
+        "Follow the writing style below when generating text:"
+    ]
+
+    for key, value in style.items():
+        lines.append(f"- {key}: {value}")
+
+    return "\n".join(lines)
+
+def get_llm(writing_style):
+    
+    prompt_text = """
+    Write a single paragraph of 120–150 words explaining why a city might 
+    choose to replace an ageing bridge rather than keep repairing it. 
+    Cover the trade-off between upfront capital cost and ongoing maintenance,
+    Return only the paragraph, with no preamble or commentary.
+    """
+    
     prompt = (prompt_text)
     completion = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model="llama-3.3-70b-versatile",
         messages=[{
                 "role": "user",
                 "content": prompt + writing_style,
             }],
         temperature=1,
-        max_completion_tokens=8192,
+        max_completion_tokens=512,
         top_p=1,
         # reasoning_effort="medium",
         stream=True,
@@ -41,9 +71,10 @@ def get_groq(prompt_text, writing_style):
     for chunk in completion:
         content = chunk.choices[0].delta.content
         if content:
-            print(content, end="")
             response += content
 
     return response
 
+def get_llm_placeholder(writing_style):
+    return 'sample output'
 
