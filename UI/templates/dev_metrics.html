@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+
+{% block title %}Diagnostics — {{ app_title }}{% endblock %}
+
+{% macro num(v, p=3) -%}
+    {%- if v is none -%}—{%- else -%}{{ ("%." ~ p ~ "f") | format(v) }}{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+{% set latest = payload.current.latest %}
+{% set cov = payload.current.coverage %}
+{% set appear = payload.current.appearance %}
+
+<section class="page-head">
+    <h2>Optimisation diagnostics</h2>
+    <p class="muted">
+        Convergence and coverage of the preference learner{% if payload.profile %}
+        for profile <strong>{{ payload.profile }}</strong>{% endif %}.
+        Raw data: <a href="{{ url_for('dev_metrics.metrics_json') }}">/dev/metrics.json</a>
+    </p>
+</section>
+
+{% if not latest %}
+<section class="panel">
+    <p class="muted">No iterations recorded yet — answer or skip at least one comparison first.</p>
+</section>
+{% else %}
+
+<section class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">BALD gain — latest vs max</div>
+        <div class="stat-value">{{ num(latest.bald_gain_bits) }}
+            <span class="stat-sub">/ {{ num(latest.bald_running_max) }} bits</span></div>
+        <div class="stat-sub">diminishing gain is the clearest “done” signal</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Mean posterior σ</div>
+        <div class="stat-value">{{ num(latest.mean_std) }}</div>
+        <div class="stat-sub">range {{ num(latest.min_std) }} – {{ num(latest.max_std) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">P(leader is truly top)</div>
+        <div class="stat-value">{{ num(latest.p_top, 2) }}</div>
+        <div class="stat-sub">Monte Carlo over the posterior</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Top-1 streak</div>
+        <div class="stat-value">{{ latest.top1_streak }}
+            <span class="stat-sub">iterations</span></div>
+        <div class="stat-sub">leader: vector #{{ latest.top1 }},
+            margin {{ num(latest.margin_sigmas, 2) }}σ</div>
+    </div>
+</section>
+
+<section class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Log-likelihood</div>
+        <div class="stat-value">{{ num(latest.log_likelihood, 2) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">LOO accuracy</div>
+        <div class="stat-value">{{ num(latest.loo_accuracy, 2) }}</div>
+        <div class="stat-sub">leave-one-out on answered comparisons</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Posterior health</div>
+        <div class="stat-value {{ 'flag-ok' if latest.sigma_ok else 'flag-bad' }}">
+            {{ 'OK' if latest.sigma_ok else 'ILL-CONDITIONED' }}
+        </div>
+        <div class="stat-sub">min eig {{ num(latest.sigma_min_eig, 4) }},
+            cond {{ num(latest.sigma_cond, 1) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Coverage</div>
+        <div class="stat-value">{{ cov.answered }}<span class="stat-sub"> answered</span>
+            {{ cov.skipped }}<span class="stat-sub"> skipped</span></div>
+        <div class="stat-sub">{{ cov.pairs_presented }} / {{ cov.pairs_total }} pairs
+            ({{ num(cov.explored_frac * 100, 2) }}% explored)</div>
+    </div>
+</section>
+
+<section>
+    <div class="chart-grid">
+        <figure class="chart-card">
+            <figcaption>Posterior utility σ per vector (convergence — should trend down)</figcaption>
+            <svg id="c-std" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Total posterior entropy (nats)</figcaption>
+            <svg id="c-entropy" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>BALD expected information gain of the selected pair</figcaption>
+            <svg id="c-bald" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Kendall τ vs previous iteration (ranking stability)</figcaption>
+            <svg id="c-tau" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>P(current leader is genuinely top-ranked)</figcaption>
+            <svg id="c-ptop" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Top-1 vs runner-up margin, in posterior σ</figcaption>
+            <svg id="c-margin" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Log-likelihood of answered comparisons</figcaption>
+            <svg id="c-loglik" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Leave-one-out predictive accuracy</figcaption>
+            <svg id="c-loo" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Fraction of the pair space explored</figcaption>
+            <svg id="c-explored" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+        <figure class="chart-card">
+            <figcaption>Wall-clock per step (seconds)</figcaption>
+            <svg id="c-time" role="img"></svg>
+            <div class="chart-legend"></div>
+        </figure>
+    </div>
+</section>
+
+{% if payload.tau_vs_recent %}
+<section class="panel">
+    <h3>Current ranking vs recent iterations</h3>
+    <p class="muted">Kendall τ between the current full ranking and each retained previous ranking.</p>
+    <table>
+        <thead><tr><th class="num">Iteration</th><th class="num">τ vs current</th></tr></thead>
+        <tbody>
+            {% for row in payload.tau_vs_recent | reverse %}
+            <tr>
+                <td class="num">{{ row.iteration }}</td>
+                <td class="num">{{ num(row.tau) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+<section class="panel">
+    <h3>Top vectors under the fitted utilities</h3>
+    <p class="muted">
+        Appearance counts expose vectors the acquisition function is starving:
+        min {{ appear.min }}, mean {{ num(appear.mean, 1) }}, max {{ appear.max }};
+        {{ appear.never_shown }} of {{ appear.counts | length }} vectors never shown.
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">Rank</th>
+                <th class="num">ID</th>
+                <th>Style profile</th>
+                <th class="num">Utility</th>
+                <th class="num">±σ</th>
+                <th class="num">Shown</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in payload.current.top_vectors %}
+            <tr>
+                <td class="num">{{ row.rank }}</td>
+                <td class="num">{{ row.id }}</td>
+                <td>{{ row.style }}</td>
+                <td class="num">{{ "%+.3f" | format(row.score) }}</td>
+                <td class="num">{{ "%.3f" | format(row.std) }}</td>
+                <td class="num">{{ row.appearances }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% endif %}
+
+<script type="application/json" id="metrics-data">{{ payload | tojson }}</script>
+<script>
+(function () {
+    "use strict";
+    var data = JSON.parse(document.getElementById("metrics-data").textContent);
+    var iters = data.iterations || [];
+    var ACCENT = "#76B900", GREY = "#8A8A8A", DIM = "#555555", AMBER = "#F5A623";
+
+    function seriesOf(key) {
+        return iters
+            .filter(function (s) { return s[key] !== null && s[key] !== undefined && isFinite(s[key]); })
+            .map(function (s) { return { x: s.iteration, y: s[key] }; });
+    }
+
+    function fmtNum(v) {
+        if (!isFinite(v)) return "";
+        var a = Math.abs(v);
+        if (a !== 0 && (a < 0.001 || a >= 10000)) return v.toExponential(1);
+        return String(Number(v.toPrecision(3)));
+    }
+
+    function drawChart(id, seriesList) {
+        var svg = document.getElementById(id);
+        if (!svg) return;
+        var W = 480, H = 220, L = 48, R = 10, T = 10, B = 26;
+        svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+        var drawn = seriesList.filter(function (s) { return s.points.length > 0; });
+        if (!drawn.length) {
+            svg.innerHTML = '<text x="' + (W / 2) + '" y="' + (H / 2) +
+                '" class="tick" text-anchor="middle">no data yet</text>';
+            return;
+        }
+        var all = drawn.reduce(function (acc, s) { return acc.concat(s.points); }, []);
+        var xmin = Math.min.apply(null, all.map(function (p) { return p.x; }));
+        var xmax = Math.max.apply(null, all.map(function (p) { return p.x; }));
+        var ymin = Math.min.apply(null, all.map(function (p) { return p.y; }));
+        var ymax = Math.max.apply(null, all.map(function (p) { return p.y; }));
+        if (xmax === xmin) { xmax = xmin + 1; }
+        if (ymax === ymin) {
+            var flat = Math.abs(ymax) * 0.1 || 1;
+            ymax += flat; ymin -= flat;
+        } else {
+            var pad = (ymax - ymin) * 0.06;
+            ymax += pad; ymin -= pad;
+        }
+        var sx = function (x) { return L + (x - xmin) / (xmax - xmin) * (W - L - R); };
+        var sy = function (y) { return H - B - (y - ymin) / (ymax - ymin) * (H - T - B); };
+        var out = "";
+        for (var i = 0; i <= 4; i++) {
+            var yv = ymin + (ymax - ymin) * i / 4;
+            out += '<line class="grid" x1="' + L + '" y1="' + sy(yv).toFixed(1) +
+                   '" x2="' + (W - R) + '" y2="' + sy(yv).toFixed(1) + '"/>';
+            out += '<text class="tick" x="' + (L - 6) + '" y="' + (sy(yv) + 3).toFixed(1) +
+                   '" text-anchor="end">' + fmtNum(yv) + "</text>";
+        }
+        out += '<text class="tick" x="' + L + '" y="' + (H - 8) + '">' + fmtNum(xmin) + "</text>";
+        out += '<text class="tick" x="' + (W - R) + '" y="' + (H - 8) +
+               '" text-anchor="end">' + fmtNum(xmax) + "</text>";
+        drawn.forEach(function (s) {
+            var pts = s.points.map(function (p) {
+                return sx(p.x).toFixed(1) + "," + sy(p.y).toFixed(1);
+            }).join(" ");
+            out += '<polyline fill="none" stroke="' + s.color + '" stroke-width="1.5"' +
+                   (s.dashed ? ' stroke-dasharray="4 3"' : "") + ' points="' + pts + '"/>';
+        });
+        svg.innerHTML = out;
+        var legend = svg.parentElement.querySelector(".chart-legend");
+        if (legend) {
+            legend.innerHTML = drawn.map(function (s) {
+                return '<span class="legend-item"><span class="legend-swatch" style="background:' +
+                       s.color + '"></span>' + s.label + "</span>";
+            }).join("");
+        }
+    }
+
+    drawChart("c-std", [
+        { label: "mean σ", color: ACCENT, points: seriesOf("mean_std") },
+        { label: "max σ", color: GREY, points: seriesOf("max_std") },
+        { label: "min σ", color: DIM, points: seriesOf("min_std") }
+    ]);
+    drawChart("c-entropy", [
+        { label: "entropy (nats)", color: ACCENT, points: seriesOf("entropy") }
+    ]);
+    drawChart("c-bald", [
+        { label: "BALD gain (bits)", color: ACCENT, points: seriesOf("bald_gain_bits") },
+        { label: "running max", color: GREY, dashed: true, points: seriesOf("bald_running_max") }
+    ]);
+    drawChart("c-tau", [
+        { label: "τ vs previous iteration", color: ACCENT, points: seriesOf("tau_prev") }
+    ]);
+    drawChart("c-ptop", [
+        { label: "P(leader is top)", color: ACCENT, points: seriesOf("p_top") }
+    ]);
+    drawChart("c-margin", [
+        { label: "margin (posterior σ)", color: ACCENT, points: seriesOf("margin_sigmas") }
+    ]);
+    drawChart("c-loglik", [
+        { label: "log-likelihood", color: ACCENT, points: seriesOf("log_likelihood") }
+    ]);
+    drawChart("c-loo", [
+        { label: "LOO accuracy", color: ACCENT, points: seriesOf("loo_accuracy") }
+    ]);
+    drawChart("c-explored", [
+        { label: "explored fraction", color: ACCENT, points: seriesOf("explored_frac") }
+    ]);
+    drawChart("c-time", [
+        { label: "fit (s)", color: ACCENT, points: seriesOf("fit_seconds") },
+        { label: "acquisition (s)", color: AMBER, points: seriesOf("acq_seconds") }
+    ]);
+})();
+</script>
+{% endblock %}

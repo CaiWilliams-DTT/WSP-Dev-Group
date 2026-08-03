@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Current iteration</div>
+        <div class="stat-value">#{{ iteration }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Answered</div>
+        <div class="stat-value">{{ answered }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Skipped</div>
+        <div class="stat-value">{{ skipped }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Pairs remaining</div>
+        <div class="stat-value">{{ pairs_remaining }}</div>
+    </div>
+</section>
+
+{% if exhausted %}
+<section class="panel">
+    <h2>Every pair has been reviewed</h2>
+    <p class="muted">
+        There are no unseen comparisons left to present. The ranking below
+        reflects the fitted utilities under the current posterior.
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">Rank</th>
+                <th>Style profile</th>
+                <th class="num">Utility</th>
+                <th class="num">±σ</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in ranking %}
+            <tr>
+                <td class="num">{{ row.rank }}</td>
+                <td>{{ row.profile.values() | join(' · ') }}</td>
+                <td class="num">{{ "%+.3f" | format(row.score) }}</td>
+                <td class="num">{{ "%.3f" | format(row.std) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="margin-top: 20px;">
+        {% if export_ok %}
+        <a class="btn btn-primary" href="{{ url_for('export_styleguide') }}" download>Export style guide</a>
+        {% else %}
+        <span class="btn btn-disabled" aria-disabled="true" title="{{ export_reason }}">Export style guide</span>
+        {% endif %}
+    </p>
+</section>
+{% else %}
+<section class="compare-intro">
+    <h2>Select your preferred sample</h2>
+    <p class="muted">Choose the candidate whose writing style you prefer, or skip if you have no preference.</p>
+</section>
+
+<form action="{{ url_for('handle_action') }}" method="POST">
+    <div class="compare-grid">
+        {% for label, value, spec, text in [
+            ("A", "select_a", profile_a, candidate_a),
+            ("B", "select_b", profile_b, candidate_b),
+        ] %}
+        <article class="candidate">
+            <h3 class="candidate-title">Candidate {{ label }}</h3>
+            <dl class="style-spec">
+                {% for dim, val in spec.items() %}
+                <div class="spec-row">
+                    <dt>{{ dim }}</dt>
+                    <dd>{{ val }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+            <div class="sample-text">{{ text }}</div>
+            <button type="submit" name="action" value="{{ value }}" class="btn btn-primary btn-block">
+                Select {{ label }}
+            </button>
+        </article>
+        {% endfor %}
+    </div>
+
+    <div class="compare-actions">
+        <button type="submit" name="action" value="skip" class="btn">No preference — skip</button>
+    </div>
+</form>
+{% endif %}
+
+<section class="toolbar">
+    {% if not exhausted %}
+        {% if export_ok %}
+        <a class="btn" href="{{ url_for('export_styleguide') }}" download>Export style guide</a>
+        {% else %}
+        <span class="btn btn-disabled" aria-disabled="true" title="{{ export_reason }}">Export style guide</span>
+        {% endif %}
+    {% endif %}
+    <form action="{{ url_for('handle_action') }}" method="POST" class="inline-form">
+        <button type="submit" name="action" value="reset" class="btn btn-ghost">Reset session</button>
+    </form>
+</section>
+{% endblock %}

@@ -13,7 +13,7 @@ class StyleFeatureSpace:
         "Formality": ["Casual", "Conversational-Professional", "Formal"],
         "Rhythm & Pacing": ["Terse & Punchy", "Measured & Flowing", "Expansive & Meandering"],
     }
-
+    
     def __init__(self, features: Optional[dict[str, list[str]]] = None) -> None:
         self.features = features if features is not None else self.DEFAULT_FEATURES
 

@@ -16,6 +16,17 @@ if not API_KEY:
 
 client = Groq(api_key=API_KEY)
 
+# 150
+# Paragraph examples:
+# Resourcing email 
+# 
+#
+#
+#
+
+# on the create profile -> pop-up where the user will select what it will be used for (e.g., email, report, teams message etc.) and then the LLM will generate a paragraph based on that.
+
+
 def style_dict_to_guide(style: dict) -> str:
     """
     Convert a writing style dictionary into a style guide string.

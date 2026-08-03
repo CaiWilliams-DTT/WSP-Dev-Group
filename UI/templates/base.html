@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ app_title }}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <div class="site-header-inner">
+            <div class="brand">
+                <a class="brand-link" href="{{ url_for('index') }}">{{ app_title }}</a>
+                {% if main_subtitle %}<span class="brand-sub">{{ main_subtitle }}</span>{% endif %}
+                {% if dev_metrics_enabled %}
+                <nav class="site-nav">
+                    <a href="{{ url_for('dev_metrics.metrics_page') }}">Diagnostics</a>
+                </nav>
+                {% endif %}
+            </div>
+
+            <div class="profile-bar">
+                <span class="profile-status">
+                    {% if active_profile %}
+                        <span class="profile-name">{{ active_profile }}</span>
+                    {% else %}
+                        <span class="profile-name muted">No profile</span>
+                    {% endif %}
+                    {% if unsaved_changes %}
+                        <span class="badge badge-dirty" title="Changes not yet saved to the profile file">Unsaved</span>
+                    {% elif active_profile %}
+                        <span class="badge" title="All changes saved">Saved</span>
+                    {% endif %}
+                </span>
+
+                <form action="{{ url_for('profile_load') }}" method="POST" class="inline-form">
+                    <select name="slug" aria-label="Profile to load">
+                        <option value="" disabled selected>Choose profile…</option>
+                        {% for p in profiles %}
+                        <option value="{{ p.slug }}">{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn btn-sm">Load</button>
+                </form>
+
+                <form action="{{ url_for('profile_new') }}" method="POST" class="inline-form">
+                    <input type="text" name="name" placeholder="New profile name" aria-label="New profile name">
+                    <button type="submit" class="btn btn-sm">New</button>
+                </form>
+
+                <form action="{{ url_for('profile_save') }}" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-sm"
+                            {% if not active_profile %}disabled title="Create a profile first"{% endif %}>
+                        Save
+                    </button>
+                </form>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flashes">
+                {% for category, message in messages %}
+                <div class="flash flash-{{ category }}" role="alert">{{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
