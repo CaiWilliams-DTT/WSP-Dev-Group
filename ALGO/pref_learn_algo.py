@@ -363,6 +363,48 @@ class MythosNonLinearAlgo:
         return np.column_stack((self.population[order].astype(float),
                                 self.scores[order]))
 
+    def optimality_confidence(self, n_samples: int = 1000, rel_tol: float = 0.02,
+                              seed: int = 0):
+        """
+        Posterior probability, in [0, 1], that the current best-scoring
+        vector really is the best vector in the population.
+
+        How it works, in plain English
+        ------------------------------
+        Beliefs about the weights are the Gaussian N(mu, Sigma), so the
+        whole utility table is a random object rather than a fixed list.
+        Draw `n_samples` weight vectors from that posterior, rebuild every
+        vector's utility under each draw, and count the fraction of draws in
+        which today's leader still comes out on top.  That fraction is a
+        Monte Carlo estimate of P(leader is optimal | answers so far): it
+        starts at chance level and only approaches 1 once Sigma has shrunk
+        far enough that no weight vector we still consider plausible would
+        reorder the leader.
+
+        `rel_tol` credits a draw to the leader when it lands within that
+        fraction of the draw's own utility spread of the winner - i.e. when
+        it is *practically* optimal.  Without it, a dimension the user is
+        genuinely indifferent about would cap the figure forever: the sign
+        of a near-zero weight never resolves, even though getting it wrong
+        costs the user nothing.  Pass rel_tol=0.0 for the strict "is exactly
+        the argmax" probability.
+
+        Sampling uses a locally seeded RNG, so the estimate is reproducible
+        across calls and the learner's own stream - and hence a bit-identical
+        save/load cycle - is left untouched.
+        """
+        vals, vecs = np.linalg.eigh(self._Sigma)
+        # Sigma is PSD in exact arithmetic; the rank-1 shrinks in
+        # update_score can leave tiny negative eigenvalues behind, so clip
+        # before taking the square root.
+        root = vecs * np.sqrt(np.clip(vals, 0.0, None))
+        draws = np.random.default_rng(seed).standard_normal((self._dim, int(n_samples)))
+        utilities = self._phi @ (self._mu[:, None] + root @ draws)   # (N, n_samples)
+        leader = int(np.argmax(self.scores))
+        best = utilities.max(axis=0)
+        tol = float(rel_tol) * (best - utilities.min(axis=0))
+        return float(np.mean(utilities[leader] >= best - tol))
+
     def to_dict(self):
         """
         JSON-serialisable snapshot of the full learner state.
@@ -742,6 +784,52 @@ class MythosLinearAlgo:
         order = np.argsort(-self.scores, kind="stable")
         return np.column_stack((self.population[order].astype(float),
                                 self.scores[order]))
+
+    def optimality_confidence(self, n_samples: int = 1000, rel_tol: float = 0.02,
+                              seed: int = 0):
+        """
+        Posterior probability, in [0, 1], that the current best-scoring
+        vector really is the best vector in the population.
+
+        How it works, in plain English
+        ------------------------------
+        Beliefs about the slopes are the Gaussian N(mu, Sigma), so the whole
+        utility table is a random object rather than a fixed list.  Draw
+        `n_samples` slope vectors from that posterior, rebuild every
+        vector's utility under each draw, and count the fraction of draws in
+        which today's leader still comes out on top.  That fraction is a
+        Monte Carlo estimate of P(leader is optimal | answers so far): it
+        starts at chance level and only approaches 1 once Sigma has shrunk
+        far enough that no slope vector we still consider plausible would
+        reorder the leader.
+
+        Under the linear model the optimum is an endpoint of every
+        dimension, so the question reduces to getting all L slope *signs*
+        right: chance level is 1 / 2^L, not 1 / N.
+
+        `rel_tol` credits a draw to the leader when it lands within that
+        fraction of the draw's own utility spread of the winner - i.e. when
+        it is *practically* optimal.  Without it, a dimension the user is
+        genuinely indifferent about would cap the figure forever: the sign
+        of a near-zero slope never resolves, even though getting it wrong
+        costs the user nothing.  Pass rel_tol=0.0 for the strict "is exactly
+        the argmax" probability.
+
+        Sampling uses a locally seeded RNG, so the estimate is reproducible
+        across calls and the learner's own stream - and hence a bit-identical
+        save/load cycle - is left untouched.
+        """
+        vals, vecs = np.linalg.eigh(self._Sigma)
+        # Sigma is PSD in exact arithmetic; the rank-1 shrinks in
+        # update_score can leave tiny negative eigenvalues behind, so clip
+        # before taking the square root.
+        root = vecs * np.sqrt(np.clip(vals, 0.0, None))
+        draws = np.random.default_rng(seed).standard_normal((self._dim, int(n_samples)))
+        utilities = self._phi @ (self._mu[:, None] + root @ draws)   # (N, n_samples)
+        leader = int(np.argmax(self.scores))
+        best = utilities.max(axis=0)
+        tol = float(rel_tol) * (best - utilities.min(axis=0))
+        return float(np.mean(utilities[leader] >= best - tol))
 
     def to_dict(self):
         """

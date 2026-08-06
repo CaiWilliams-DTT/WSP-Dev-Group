@@ -7,12 +7,42 @@ class StyleFeatureSpace:
     """A multidimensional feature space for text style profiles with dynamic vectorization."""
 
     DEFAULT_FEATURES: dict[str, list[str]] = {
-        "Sentence Structure": ["Simple & Direct", "Balanced & Varied", "Complex & Layered"],
-        "Vocab & Dictation": ["Plain & Accessible", "Precise & Technical", "Elevated & Literary"],
-        "Tone": ["Warm & Personal", "Neutral & Objective", "Assertive & Opinionated"],
-        "Formality": ["Casual", "Conversational-Professional", "Formal"],
-        "Rhythm & Pacing": ["Terse & Punchy", "Measured & Flowing", "Expansive & Meandering"],
-    }
+    "Structure and Information Density": [
+        "Simple, direct sentence structures. Short paragraphs (1-2 sentences), low information density, frequent breaks and whitespace. One idea at a time with minimal layering.",
+        "Balanced sentence variety and paragraph development. Standard 3-5 sentence paragraphs built around a single idea. Moderate information density with clear organization.",
+        "Complex, layered sentence structures and dense paragraphs containing multiple related ideas. High information density, extended reasoning, and substantial conceptual packing before breaks.",
+    ],
+
+    "Voice, Formality and Delivery": [
+        "Neutral, casual, terse, punchy, and economical. Minimal elaboration, frequent short bursts, conversational phrasing, and rapid point-to-point movement.",
+        "Professional and conversational. Measured pacing, moderate explanation, smooth transitions, and a balance between clarity and personality.",
+        "Formal or strongly expressive. Expansive pacing, extensive elaboration, visible conviction or evaluation, and willingness to explore ideas from multiple angles before concluding.",
+    ],
+
+    "Hedging and Directness": [
+        "Highly direct and assertive. States claims plainly, uses few qualifiers, and avoids hedging language unless strictly necessary.",
+        "Calibrated and balanced. Uses hedging only where uncertainty genuinely exists, while still making the core point clearly.",
+        "Cautious and highly qualified. Frequently acknowledges uncertainty, alternative interpretations, limitations, and multiple angles before committing to a position.",
+    ],
+
+    "Vocabulary and Diction": [
+        "Plain and accessible. Common words, everyday register, minimal jargon.",
+        "Precise and technical when useful. Domain-appropriate terminology explained or contextualized.",
+        "Elevated, literary, or highly specialized vocabulary. Emphasis on precision, nuance, and evocative word choice.",
+    ],
+
+    "Rhetorical Devices": [
+        "Literal language. Few or no metaphors, analogies, or figurative devices.",
+        "Occasional metaphor or analogy used selectively for clarity.",
+        "Frequent and sustained figurative language, recurring analogies, and rhetorical framing woven through the text.",
+    ],
+
+    "Person and Perspective": [
+        "Impersonal. Third-person perspective, avoids direct reader address and personal opinion.",
+        "Mixed perspective. Uses first person for opinions and second person for guidance when helpful.",
+        "Strong personal voice. First-person reasoning and direct conversational engagement with the reader throughout.",
+    ],
+}
     
     def __init__(self, features: Optional[dict[str, list[str]]] = None) -> None:
         self.features = features if features is not None else self.DEFAULT_FEATURES

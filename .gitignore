@@ -220,3 +220,4 @@ __marimo__/
 # Virtual environment
 .venv/
 .env/
+.code-workspace/

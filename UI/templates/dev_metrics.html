@@ -20,6 +20,54 @@
     </p>
 </section>
 
+{% set key = payload.api_key %}
+<section class="panel">
+    <h3>LLM API key</h3>
+    <p class="muted">
+        Supply your own Groq key to have candidate samples generated on your
+        account instead of this deployment's. It is held in server memory for
+        this browser session only — never stored in a cookie, never written
+        into a profile file, and never shown back to you in full. Clearing it,
+        or restarting the server, forgets it.
+    </p>
+
+    <p>
+        Currently using:
+        {% if key.set %}
+        <strong class="flag-ok">your key</strong>
+        <code>{{ key.masked }}</code> — samples are generated live.
+        {% elif key.deployment_key_available %}
+        <strong>this deployment's key</strong>, and only if live generation is
+        switched on — samples are currently the offline placeholder.
+        {% else %}
+        <strong class="flag-bad">no key</strong> — samples are the offline
+        placeholder until you supply one.
+        {% endif %}
+    </p>
+
+    {% if key.last_error %}
+    <p class="flag-bad">Last generation error: {{ key.last_error }}</p>
+    {% endif %}
+
+    <div class="key-row">
+        <form action="{{ url_for('dev_metrics.set_api_key') }}" method="POST" class="inline-form">
+            <input type="password" name="api_key" class="key-input"
+                   placeholder="{% if key.set %}Replace key…{% else %}gsk_…{% endif %}"
+                   autocomplete="off" spellcheck="false" aria-label="Your Groq API key">
+            <button type="submit" class="btn btn-sm">Use this key</button>
+        </form>
+        {% if key.set %}
+        <form action="{{ url_for('dev_metrics.clear_api_key') }}" method="POST" class="inline-form">
+            <button type="submit" class="btn btn-sm btn-ghost">Clear key</button>
+        </form>
+        {% endif %}
+    </div>
+    <p class="muted key-note">
+        The key is posted to this server, so only enter it over HTTPS or on a
+        server you trust.
+    </p>
+</section>
+
 {% if not latest %}
 <section class="panel">
     <p class="muted">No iterations recorded yet — answer or skip at least one comparison first.</p>

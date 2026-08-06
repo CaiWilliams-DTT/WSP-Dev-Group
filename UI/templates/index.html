@@ -14,9 +14,14 @@
         <div class="stat-label">Skipped</div>
         <div class="stat-value">{{ skipped }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Pairs remaining</div>
-        <div class="stat-value">{{ pairs_remaining }}</div>
+    <div class="stat-card"
+         title="Posterior probability that the highest-scoring style guide really is the best one in the space, estimated by sampling the model's weight posterior.">
+        <div class="stat-label">Optimisation confidence</div>
+        <div class="stat-value">{{ "%.0f" | format(confidence) }}%</div>
+        <div class="meter" role="img"
+             aria-label="Optimisation confidence {{ '%.0f' | format(confidence) }} percent">
+            <span style="width: {{ '%.1f' | format(confidence) }}%"></span>
+        </div>
     </div>
 </section>
 
@@ -63,20 +68,12 @@
 
 <form action="{{ url_for('handle_action') }}" method="POST">
     <div class="compare-grid">
-        {% for label, value, spec, text in [
-            ("A", "select_a", profile_a, candidate_a),
-            ("B", "select_b", profile_b, candidate_b),
+        {% for label, value, text in [
+            ("A", "select_a", candidate_a),
+            ("B", "select_b", candidate_b),
         ] %}
         <article class="candidate">
             <h3 class="candidate-title">Candidate {{ label }}</h3>
-            <dl class="style-spec">
-                {% for dim, val in spec.items() %}
-                <div class="spec-row">
-                    <dt>{{ dim }}</dt>
-                    <dd>{{ val }}</dd>
-                </div>
-                {% endfor %}
-            </dl>
             <div class="sample-text">{{ text }}</div>
             <button type="submit" name="action" value="{{ value }}" class="btn btn-primary btn-block">
                 Select {{ label }}

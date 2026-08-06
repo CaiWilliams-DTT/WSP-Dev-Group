@@ -8,8 +8,8 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
-from flask import (Flask, Response, flash, jsonify, redirect, render_template,
-                   request, session, url_for)
+from flask import (Flask, Response, flash, has_request_context, redirect,
+                   render_template, request, session, url_for)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -17,7 +17,7 @@ if BASE_DIR not in sys.path:
 
 from DIMENTIONS.input import StyleFeatureSpace
 from ALGO.pref_learn_algo import MythosLinearAlgo, PairsExhausted
-from LLM_API.llm_api import get_llm_placeholder, style_dict_to_guide
+from LLM_API.llm_api import get_llm, get_llm_placeholder, pick_prompt, style_dict_to_guide
 
 app = Flask(__name__)
 # Required for secure session cookie signing
@@ -31,6 +31,11 @@ MAIN_SUBTITLE = "Active style preference learning"
 PROFILE_SCHEMA_VERSION = 1
 PROFILES_DIR = os.path.join(BASE_DIR, "profiles")
 MIN_ANSWERED_FOR_EXPORT = 5
+# Profiles are uploaded from the user's own machine, so cap what we will
+# read. The Flask-level limit rejects the request outright (413, handled
+# below); the smaller one produces a friendly message for a plausible file.
+MAX_PROFILE_BYTES = 2 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
 
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
@@ -58,9 +63,13 @@ _STORE_LOCK = threading.Lock()
 def _utc_now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
+def new_state(api_key=None):
+    """Build a fresh style space, model, and first comparison pair.
 
-def new_state():
-    """Build a fresh style space, model, and first comparison pair."""
+    `api_key` is carried in rather than reset because the key belongs to the
+    person at the browser, not to the model being trained — a session reset
+    or a profile switch should not make them type it again.
+    """
     style_space = StyleFeatureSpace()
     feature_matrix = style_space.generate_feature_matrix(as_numpy=True)
     algo = MythosLinearAlgo(vectors=feature_matrix, past_scores=False)
@@ -76,10 +85,13 @@ def new_state():
         "exhausted": False,
         "metrics": MetricsCollector() if DEV_METRICS else None,
         "metrics_raw": None,
+        # Server-side only: never goes in the session cookie (which is signed,
+        # not encrypted) and never gets written into a profile file.
+        "api_key": api_key,
+        "llm_error": None,
     }
     refresh_candidates(state)
     return state
-
 
 def get_state():
     """Return the state for the current browser session, creating it if needed."""
@@ -91,7 +103,6 @@ def get_state():
             session["sid"] = sid
             _STORE[sid] = new_state()
         return _STORE[sid]
-
 
 def replace_state(state):
     """Swap in a new state object for the current browser session."""
@@ -105,6 +116,33 @@ def replace_state(state):
 # =====================================================================
 # STATE HELPERS
 # =====================================================================
+def generate_sample(state, style_guide, prompt):
+    """
+    Produce the sample text for one style profile.
+
+    `prompt` is the writing task, drawn once per pair by the caller so both
+    candidates answer the same task and the user is comparing style alone.
+
+    With no user-supplied key the app stays on the offline placeholder, so
+    ordinary use costs nothing and never reaches Groq. Entering a key on the
+    diagnostics page opts that session in to live generation, billed to that
+    key instead of the deployment's. A key that is rejected or rate-limited
+    must not break the comparison loop, so failures fall back to the
+    placeholder and are reported once per pair.
+    """
+    api_key = state.get("api_key")
+    if not api_key:
+        return get_llm_placeholder(style_guide, prompt=prompt)
+    try:
+        text = get_llm(style_guide, api_key=api_key, prompt=prompt)
+    except Exception as exc:
+        # Scrub the key in case the client echoed it back in the message.
+        detail = str(exc).replace(api_key, "[key]")
+        state["llm_error"] = f"{type(exc).__name__}: {detail}"
+        return get_llm_placeholder(style_guide, prompt=prompt)
+    return text
+
+
 def refresh_candidates(state):
     """Draw the next unseen comparison pair; flip to the end state when none remain."""
     algo = state["algo"]
@@ -126,9 +164,14 @@ def refresh_candidates(state):
     space = state["style_space"]
     state["profile_a"] = space.devectorize_profile(a_vect)
     state["profile_b"] = space.devectorize_profile(b_vect)
-    state["candidate_a"] = get_llm_placeholder(style_dict_to_guide(state["profile_a"]))
-    state["candidate_b"] = get_llm_placeholder(style_dict_to_guide(state["profile_b"]))
-
+    state["llm_error"] = None
+    # One task for the whole pair, so the two candidates differ only in style.
+    prompt = pick_prompt()
+    state["candidate_a"] = generate_sample(state, style_dict_to_guide(state["profile_a"]), prompt)
+    state["candidate_b"] = generate_sample(state, style_dict_to_guide(state["profile_b"]), prompt)
+    if state["llm_error"] and has_request_context():
+        flash(f"Generation with your API key failed, showing placeholder text "
+              f"— {state['llm_error']}", "error")
 
 def record_choice(state, choice: str):
     """Apply the user's preference to the model, log it, and advance."""
@@ -145,7 +188,6 @@ def record_choice(state, choice: str):
     state["dirty"] = True
     refresh_candidates(state)
 
-
 def record_skip(state):
     """Log a no-preference outcome (kept out of the likelihood) and advance."""
     algo = state["algo"]
@@ -157,7 +199,6 @@ def record_skip(state):
     state["dirty"] = True
     refresh_candidates(state)
 
-
 def comparison_counts(algo):
     """(answered, skipped) totals from the comparison log."""
     answered = skipped = 0
@@ -168,7 +209,6 @@ def comparison_counts(algo):
             answered += 1
     return answered, skipped
 
-
 def export_status(state):
     """Whether the style guide export is meaningful yet, and why not if not."""
     answered, _ = comparison_counts(state["algo"])
@@ -176,7 +216,6 @@ def export_status(state):
         return True, None
     return False, (f"Needs at least {MIN_ANSWERED_FOR_EXPORT} answered comparisons "
                    f"before the ranking is meaningful (currently {answered}).")
-
 
 def top_ranking(state, limit=10):
     """Best vectors under the fitted utilities, decoded for display."""
@@ -198,13 +237,11 @@ def top_ranking(state, limit=10):
 class ProfileError(ValueError):
     """User-facing profile failure; always surfaced as a flash, never a 500."""
 
-
 def slugify(name):
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60]
     if not slug:
         raise ProfileError("Profile name must contain at least one letter or digit.")
     return slug
-
 
 def profile_path(slug):
     """Resolve a slug to a file path, refusing anything outside profiles/."""
@@ -214,29 +251,6 @@ def profile_path(slug):
     if os.path.dirname(path) != os.path.abspath(PROFILES_DIR):
         raise ProfileError("Invalid profile identifier.")
     return path
-
-
-def list_profiles():
-    profiles = []
-    try:
-        names = sorted(os.listdir(PROFILES_DIR))
-    except OSError:
-        return profiles
-    for fname in names:
-        if not fname.endswith(".json"):
-            continue
-        slug = fname[:-5]
-        entry = {"slug": slug, "name": slug, "updated": None}
-        try:
-            with open(os.path.join(PROFILES_DIR, fname), encoding="utf-8") as fh:
-                data = json.load(fh)
-            entry["name"] = data.get("name") or slug
-            entry["updated"] = data.get("updated")
-        except (OSError, ValueError):
-            entry["name"] = f"{slug} (unreadable)"
-        profiles.append(entry)
-    return profiles
-
 
 def serialize_state(state):
     data = {
@@ -258,7 +272,6 @@ def serialize_state(state):
         data["dev_metrics"] = state["metrics_raw"]
     return data
 
-
 def save_profile(state):
     data = serialize_state(state)
     path = profile_path(state["profile_slug"])
@@ -267,9 +280,12 @@ def save_profile(state):
     state["dirty"] = False
     return data
 
+def restore_state(data, api_key=None):
+    """Rebuild session state from a profile file's contents.
 
-def restore_state(data):
-    """Rebuild session state from a profile file's contents."""
+    `api_key` is supplied by the caller, never read from the file: profiles
+    are uploaded by users and must not be able to inject a credential.
+    """
     version = data.get("schema_version")
     if version != PROFILE_SCHEMA_VERSION:
         raise ProfileError(f"Unsupported profile schema version {version!r} "
@@ -291,6 +307,8 @@ def restore_state(data):
         "exhausted": False,
         "metrics": None,
         "metrics_raw": None,
+        "api_key": api_key,
+        "llm_error": None,
     }
     if DEV_METRICS:
         # Tolerates an absent or foreign-version dev_metrics key.
@@ -310,7 +328,6 @@ def inject_chrome():
     return {
         "app_title": APP_TITLE,
         "main_subtitle": MAIN_SUBTITLE,
-        "profiles": list_profiles(),
         "active_profile": state.get("profile_name"),
         "unsaved_changes": bool(state.get("dirty")),
         "dev_metrics_enabled": DEV_METRICS,
@@ -332,11 +349,9 @@ def index():
         exhausted=state["exhausted"],
         candidate_a=state["candidate_a"],
         candidate_b=state["candidate_b"],
-        profile_a=state["profile_a"],
-        profile_b=state["profile_b"],
         answered=answered,
         skipped=skipped,
-        pairs_remaining=algo.n_pairs_total - algo.n_pairs_presented,
+        confidence=100.0 * algo.optimality_confidence(),
         ranking=top_ranking(state) if state["exhausted"] else None,
         export_ok=export_ok,
         export_reason=export_reason,
@@ -350,7 +365,7 @@ def handle_action():
 
     if action == "reset":
         # Discard the model entirely so the posterior starts clean
-        replace_state(new_state())
+        replace_state(new_state(api_key=state.get("api_key")))
         flash("Session reset — the posterior starts clean.", "info")
     elif state["exhausted"]:
         flash("No comparisons left — every pair has been presented.", "error")
@@ -364,14 +379,10 @@ def handle_action():
     return redirect(url_for("index"))
 
 
-@app.route("/profiles", methods=["GET"])
-def profiles_index():
-    return jsonify(list_profiles())
-
-
 @app.route("/profile/new", methods=["POST"])
 def profile_new():
     name = (request.form.get("name") or "").strip()
+    api_key = get_state().get("api_key")
     try:
         if not name:
             raise ProfileError("Enter a name for the new profile.")
@@ -380,7 +391,7 @@ def profile_new():
         if os.path.exists(path):
             raise ProfileError(f'A profile called "{name}" already exists — '
                                f'load it or pick another name.')
-        state = new_state()
+        state = new_state(api_key=api_key)
         state["profile_name"] = name
         state["profile_slug"] = slug
         replace_state(state)
@@ -411,26 +422,47 @@ def profile_save():
 
 @app.route("/profile/load", methods=["POST"])
 def profile_load():
-    slug = (request.form.get("slug") or "").strip()
-    if not slug:
-        flash("Choose a profile to load.", "error")
+    """
+    Load a profile from a file the user picks on their own machine.
+
+    Deliberately an upload rather than a server-side pick list: this runs as
+    a shared web app, so one person's results must never be discoverable —
+    let alone loadable — by another. The server therefore never enumerates
+    profiles/ for the browser; you can only open a file you already hold.
+    """
+    upload = request.files.get("profile")
+    if upload is None or not upload.filename:
+        flash("Choose a profile file to load.", "error")
         return redirect(url_for("index"))
+    api_key = get_state().get("api_key")
     try:
-        path = profile_path(slug)
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        state = restore_state(data)
-    except FileNotFoundError:
-        flash("That profile file no longer exists.", "error")
+        raw = upload.read(MAX_PROFILE_BYTES + 1)
+        if len(raw) > MAX_PROFILE_BYTES:
+            raise ProfileError("That file is too large to be a profile "
+                               f"(limit {MAX_PROFILE_BYTES // (1024 * 1024)} MB).")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ProfileError("That file does not contain a profile object.")
+        state = restore_state(data, api_key=api_key)
+    except UnicodeDecodeError:
+        flash("That file is not UTF-8 text — profiles are JSON.", "error")
     except json.JSONDecodeError:
-        flash("That profile file is not valid JSON — it may be corrupted.", "error")
+        flash("That file is not valid JSON — it may be corrupted.", "error")
     except ProfileError as exc:
         flash(str(exc), "error")
     except Exception as exc:  # never surface a 500 for a bad profile file
         flash(f"Could not load the profile: {exc}", "error")
     else:
         replace_state(state)
-        flash(f'Loaded profile "{state["profile_name"] or slug}".', "success")
+        label = state["profile_name"] or os.path.basename(upload.filename)
+        flash(f'Loaded profile "{label}".', "success")
+    return redirect(url_for("index"))
+
+
+@app.errorhandler(413)
+def profile_upload_too_large(_exc):
+    """Oversized upload: a flash beats Flask's default error page."""
+    flash("That file is too large to be a profile.", "error")
     return redirect(url_for("index"))
 
 

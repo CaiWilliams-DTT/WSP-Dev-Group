@@ -46,14 +46,13 @@ p { margin: 0.4em 0; }
   flex-wrap: wrap;
 }
 .brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-.brand-link {
+.brand-title {
   font-weight: 700;
   font-size: 1.05rem;
   color: var(--text);
-  text-decoration: none;
   letter-spacing: 0.01em;
 }
-.brand-sub { color: var(--text-muted); font-size: 0.85rem; }
+.site-nav { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
 .site-nav a {
   color: var(--text-muted);
   font-size: 0.85rem;
@@ -81,7 +80,7 @@ p { margin: 0.4em 0; }
 .badge-dirty { color: var(--warn); border-color: var(--warn); }
 
 /* ---- form controls ------------------------------------------------- */
-select, input[type="text"] {
+select, input[type="text"], input[type="password"] {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   color: var(--text);
@@ -91,8 +90,19 @@ select, input[type="text"] {
   font-size: 0.85rem;
   max-width: 220px;
 }
-select:focus, input[type="text"]:focus { outline: none; border-color: var(--accent); }
+select:focus, input[type="text"]:focus, input[type="password"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 input::placeholder { color: var(--text-muted); }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+}
 
 /* ---- buttons ------------------------------------------------------- */
 .btn {
@@ -118,6 +128,19 @@ input::placeholder { color: var(--text-muted); }
 .btn-ghost { border-color: transparent; color: var(--text-muted); }
 .btn-ghost:hover { color: var(--text); background: var(--surface); border-color: transparent; }
 .btn-sm { padding: 7px 12px; font-size: 0.82rem; }
+/* File picker: the native input is stretched invisibly over a .btn label,
+   so the whole button opens the OS file explorer while the input stays
+   present for keyboard focus and form submission. */
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.file-btn:focus-within { border-color: var(--accent); background: var(--surface); }
 .btn-block { width: 100%; }
 .btn[disabled], .btn-disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-disabled:hover { background: transparent; border-color: var(--border-strong); }
@@ -163,6 +186,20 @@ section + section { margin-top: 32px; }
 }
 .stat-value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; }
 .stat-sub { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
+.meter {
+  margin-top: 10px;
+  height: 4px;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.meter span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
 
 /* ---- comparison view ----------------------------------------------- */
 .compare-intro { margin-top: 40px; }
@@ -191,17 +228,6 @@ section + section { margin-top: 32px; }
   letter-spacing: 0.08em;
   color: var(--text-muted);
 }
-.style-spec { margin: 0; }
-.spec-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--surface-deep);
-  font-size: 0.85rem;
-}
-.spec-row dt { color: var(--text-muted); }
-.spec-row dd { margin: 0; text-align: right; }
 .sample-text {
   background: var(--surface-deep);
   border: 1px solid var(--border);
@@ -242,6 +268,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---- diagnostics page ---------------------------------------------- */
 .page-head h2 { font-size: 1.35rem; }
+.key-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+.key-input { max-width: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.key-note { font-size: 0.8rem; margin-top: 10px; }
 .chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 20px; }
 .chart-card {
   margin: 0;

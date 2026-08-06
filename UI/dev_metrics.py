@@ -9,17 +9,24 @@ never registered, no nav link renders, and no collection or timing code
 runs anywhere in the request path.
 """
 import math
+import re
 from datetime import datetime, timezone
 
 import numpy as np
-from flask import Blueprint, jsonify, render_template
+from flask import (Blueprint, flash, jsonify, redirect, render_template,
+                   request, url_for)
 from scipy.stats import kendalltau
+
+from LLM_API.llm_api import forget_client, has_default_key
 
 METRICS_SCHEMA_VERSION = 1
 RANK_HISTORY_N = 10         # rankings kept for Kendall-tau comparisons
 MC_SAMPLES = 500            # posterior draws for P(leader is truly top)
 LOO_MAX_COMPARISONS = 200   # leave-one-out is quadratic; stop beyond this
 SIGMA_COND_LIMIT = 1e8      # condition number above this flags the posterior
+# Accept any plausible token: printable ASCII, no whitespace. Deliberately
+# not pinned to the current "gsk_" prefix, which is Groq's to change.
+API_KEY_PATTERN = re.compile(r"^[!-~]{16,200}$")
 
 metrics_bp = Blueprint("dev_metrics", __name__)
 
@@ -31,6 +38,58 @@ def register_dev_metrics(app, state_getter):
     global _state_getter
     _state_getter = state_getter
     app.register_blueprint(metrics_bp)
+
+
+# =====================================================================
+# USER-SUPPLIED API KEY
+#
+# The key lives only in the server-side session state (app.py's _STORE),
+# for the lifetime of that session. It is never put in the session cookie,
+# which is signed but not encrypted; never written into a profile file; and
+# never rendered back to the page except masked.
+# =====================================================================
+def mask_key(key):
+    """Show enough of a key to recognise it, never enough to use it."""
+    key = (key or "").strip()
+    if not key:
+        return None
+    if len(key) <= 12:
+        return "•" * len(key)
+    return f"{key[:4]}{'•' * 8}{key[-4:]}"
+
+
+@metrics_bp.route("/dev/api-key", methods=["POST"])
+def set_api_key():
+    """Adopt a user-supplied Groq key for this browser session."""
+    key = (request.form.get("api_key") or "").strip()
+    if not key:
+        flash("Enter an API key.", "error")
+    elif not API_KEY_PATTERN.fullmatch(key):
+        flash("That does not look like an API key — expected 16-200 characters "
+              "with no spaces.", "error")
+    else:
+        state = _state_getter()
+        previous = state.get("api_key")
+        if previous and previous != key:
+            forget_client(previous)
+        state["api_key"] = key
+        state["llm_error"] = None
+        flash(f"Using your API key ({mask_key(key)}) for this session — sample "
+              f"text is now generated live and billed to it.", "success")
+    return redirect(url_for("dev_metrics.metrics_page"))
+
+
+@metrics_bp.route("/dev/api-key/clear", methods=["POST"])
+def clear_api_key():
+    """Forget the session's key and drop back to placeholder samples."""
+    state = _state_getter()
+    previous = state.get("api_key")
+    if previous:
+        forget_client(previous)
+    state["api_key"] = None
+    state["llm_error"] = None
+    flash("API key cleared — back to placeholder sample text.", "info")
+    return redirect(url_for("dev_metrics.metrics_page"))
 
 
 # =====================================================================
@@ -312,6 +371,13 @@ def _build_payload():
         "generated": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "profile": state.get("profile_name"),
         "schema_version": METRICS_SCHEMA_VERSION,
+        # Masked only — the raw key never leaves the server.
+        "api_key": {
+            "set": bool(state.get("api_key")),
+            "masked": mask_key(state.get("api_key")),
+            "deployment_key_available": has_default_key(),
+            "last_error": state.get("llm_error"),
+        },
         "iterations": snapshots,
         "tau_vs_recent": tau_vs_recent,
         "current": {

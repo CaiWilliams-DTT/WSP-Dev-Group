@@ -10,7 +10,7 @@ from scipy.special import expit  # numerically stable sigmoid
 
 from DIMENTIONS.input import StyleFeatureSpace
 from ALGO.pref_learn_algo import MythosLinearAlgo, MythosNonLinearAlgo
-from LLM_API.llm_api import get_llm, style_dict_to_guide
+from LLM_API.llm_api import get_llm, pick_prompt, style_dict_to_guide
 
 
 def stylefeaturespace_test():
@@ -185,8 +185,10 @@ def algo_test():
         a_styleguide = style_dict_to_guide(style_space.devectorize_profile(a_vect))
         b_styleguide = style_dict_to_guide(style_space.devectorize_profile(b_vect))
 
-        a_resp = get_llm(a_styleguide)
-        b_resp = get_llm(b_styleguide)
+        # One task for the whole pair, so the two responses differ only in style.
+        prompt = pick_prompt()
+        a_resp = get_llm(a_styleguide, prompt=prompt)
+        b_resp = get_llm(b_styleguide, prompt=prompt)
 
         print_comparison(a_resp, b_resp, round_num)
 
