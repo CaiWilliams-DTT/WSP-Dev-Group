@@ -40,7 +40,18 @@ PROMPTS = [
     "Write a one-line Teams reply confirming that the requested reconciliation has been completed and saved to the shared folder.",
 ]
 
-load_dotenv()
+# .env is a local development convenience only. A hosted deployment takes its
+# configuration from real environment variables (Azure application settings),
+# and must not read a .env that happened to get bundled into the deployment:
+# this module is imported before app.py reads DEV_METRICS, so a stray file
+# would silently switch on the dev diagnostics routes and install its
+# GROQ_API_KEY as the deployment default. Mirrors IS_PRODUCTION in UI/app.py.
+_IS_PRODUCTION = os.environ.get(
+    "APP_ENV", "production" if os.environ.get("WEBSITE_SITE_NAME") else "development"
+).strip().lower() == "production"
+if not _IS_PRODUCTION:
+    load_dotenv()
+
 API_KEY = os.getenv("GROQ_API_KEY")
 
 # Clients are built on demand and cached per key rather than once at import.
@@ -91,9 +102,6 @@ def forget_client(api_key: str) -> None:
         _clients.pop((api_key or "").strip(), None)
 
 
-import requests
-
-
 # def generate_image(
 #     prompt: str,
 #     output_file: str = "image.jpg",
@@ -114,6 +122,7 @@ import requests
 #     api_key : str
 #         Bearer token for authentication.
 #     """
+#     # needs `requests` added back to the dependencies
 #     response = requests.post(
 #         api_url,
 #         headers={

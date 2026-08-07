@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import numpy as np
 from flask import (Flask, Response, flash, has_request_context, redirect,
                    render_template, request, session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -19,9 +20,39 @@ from DIMENTIONS.input import StyleFeatureSpace
 from ALGO.pref_learn_algo import MythosLinearAlgo, PairsExhausted
 from LLM_API.llm_api import get_llm, get_llm_placeholder, pick_prompt, style_dict_to_guide
 
+# Azure App Service sets WEBSITE_SITE_NAME in every hosted container, so a
+# deployment is recognised as production without anyone remembering to set a
+# flag. APP_ENV overrides it in both directions for other hosts.
+IS_PRODUCTION = os.environ.get(
+    "APP_ENV", "production" if os.environ.get("WEBSITE_SITE_NAME") else "development"
+).strip().lower() == "production"
+
 app = Flask(__name__)
-# Required for secure session cookie signing
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-prod")
+
+# Required for secure session cookie signing. A shared, known key lets anyone
+# forge a session cookie and adopt another user's server-side state, so in
+# production a real key is mandatory rather than defaulted.
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            "SECRET_KEY is not set. Set it as an application setting before "
+            "serving traffic — without it session cookies are forgeable."
+        )
+    _secret = "dev-secret-key-change-in-prod"
+app.secret_key = _secret
+
+# TLS terminates at the Azure front end and the request reaches us over plain
+# HTTP, so without this Flask sees the wrong scheme and client address.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Only over HTTPS in production; setting it in local dev would stop the
+    # cookie being stored at all over http://localhost.
+    SESSION_COOKIE_SECURE=IS_PRODUCTION,
+)
 
 # =====================================================================
 # CONFIGURATION & CONSTANTS
@@ -29,7 +60,10 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-prod")
 APP_TITLE = "SREA Dev Group"
 MAIN_SUBTITLE = "Active style preference learning"
 PROFILE_SCHEMA_VERSION = 1
-PROFILES_DIR = os.path.join(BASE_DIR, "profiles")
+# Overridable because the deployed application directory is read-only under
+# WEBSITE_RUN_FROM_PACKAGE and is replaced wholesale on every redeploy. On
+# Azure point this at the persistent share, e.g. /home/data/profiles.
+PROFILES_DIR = os.environ.get("PROFILES_DIR") or os.path.join(BASE_DIR, "profiles")
 MIN_ANSWERED_FOR_EXPORT = 5
 # Profiles are uploaded from the user's own machine, so cap what we will
 # read. The Flask-level limit rejects the request outright (413, handled
@@ -37,7 +71,15 @@ MIN_ANSWERED_FOR_EXPORT = 5
 MAX_PROFILE_BYTES = 2 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
 
-os.makedirs(PROFILES_DIR, exist_ok=True)
+# A read-only application directory must not take the whole app down at
+# import: everything except profile save/load still works, and those routes
+# already report OSError to the user as a flash.
+try:
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+except OSError as _exc:
+    print(f"warning: profile directory {PROFILES_DIR} is not writable ({_exc}); "
+          f"saving profiles will fail. Set PROFILES_DIR to a writable path.",
+          file=sys.stderr)
 
 # Dev-only diagnostics (see dev_metrics.py). With the flag off the module
 # is never imported: the route is not registered (it 404s), no nav link
@@ -54,10 +96,50 @@ if DEV_METRICS:
 # neither, so they live here, in-process, keyed by a session id. Only that
 # id goes in the cookie. Durable persistence is handled by the profile
 # save/load routes below, which write JSON files under profiles/.
+#
+# IMPORTANT — this store is per-process and per-instance. The app must run
+# with a SINGLE gunicorn worker on a SINGLE instance: with more, requests
+# from one browser land on processes that do not share _STORE and the user
+# loses their model mid-session. Do not add --workers, and do not scale out
+# or enable autoscale, without first moving this state to something shared
+# (Redis, or a database). Entries are dropped after SESSION_TTL_SECONDS of
+# inactivity, and the oldest are shed past MAX_SESSIONS, so a stream of
+# visitors cannot grow the process without bound.
 # =====================================================================
 
 _STORE = {}
 _STORE_LOCK = threading.Lock()
+_LAST_SEEN = {}
+
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", 4 * 60 * 60))
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", 500))
+
+
+def _touch(sid):
+    """Mark a session as active. Caller must hold _STORE_LOCK."""
+    _LAST_SEEN[sid] = time.monotonic()
+
+
+def _evict(protect=None):
+    """Drop idle and surplus sessions. Caller must hold _STORE_LOCK.
+
+    Unsaved work is lost when a session is dropped, which is the same
+    outcome as the app instance recycling — the profile files are the
+    durable copy. `protect` is the session being served right now, which
+    must survive the sweep regardless.
+    """
+    now = time.monotonic()
+    for sid in [s for s, seen in _LAST_SEEN.items()
+                if s != protect and now - seen > SESSION_TTL_SECONDS]:
+        _STORE.pop(sid, None)
+        _LAST_SEEN.pop(sid, None)
+    if len(_STORE) > MAX_SESSIONS:
+        oldest = sorted(_LAST_SEEN.items(), key=lambda kv: kv[1])
+        for sid, _seen in oldest[:len(_STORE) - MAX_SESSIONS]:
+            if sid == protect:
+                continue
+            _STORE.pop(sid, None)
+            _LAST_SEEN.pop(sid, None)
 
 
 def _utc_now():
@@ -102,6 +184,8 @@ def get_state():
             sid = uuid.uuid4().hex
             session["sid"] = sid
             _STORE[sid] = new_state()
+        _touch(sid)
+        _evict(protect=sid)
         return _STORE[sid]
 
 def replace_state(state):
@@ -110,6 +194,7 @@ def replace_state(state):
     session["sid"] = sid
     with _STORE_LOCK:
         _STORE[sid] = state
+        _touch(sid)
     return state
 
 
@@ -508,5 +593,12 @@ if DEV_METRICS:
 
 
 if __name__ == "__main__":
+    # Local development only — in production this file is imported by wsgi.py
+    # and served by gunicorn, which never runs this block.
+    #
+    # debug is force-disabled under production because the Werkzeug debugger
+    # exposes an interactive console: reachable from the internet, it is
+    # remote code execution.
+    debug = not IS_PRODUCTION
     # use_reloader=False keeps the in-process store from being wiped on file saves
-    app.run(debug=True, port=5000, use_reloader=False)
+    app.run(host="127.0.0.1", port=5000, debug=debug, use_reloader=False)
