@@ -11,7 +11,6 @@ set here is not set at all.
 | Setting | Value | Why |
 | --- | --- | --- |
 | `SECRET_KEY` | a fresh random string | Signs session cookies. **The app refuses to start without it.** Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. |
-| `PROFILES_DIR` | `/home/data/profiles` | `/home` is the persistent share. The default location inside the app directory is read-only under `WEBSITE_RUN_FROM_PACKAGE` and is wiped on every redeploy. |
 | `SCM_DO_BUILD_DURING_DEPLOYMENT` | `1` | Makes the platform install `requirements.txt`. |
 | `GROQ_API_KEY` | *(optional)* | Only needed if the deployment should have a fallback key. Users supplying their own key on the diagnostics page are billed to their own account instead. |
 | `DEV_METRICS` | `true` | Registers `/dev/metrics`. This is the on/off switch — unset it and those routes 404 with no collection overhead anywhere. See the diagnostics section below. |
@@ -53,8 +52,8 @@ zipping the folder, exclude it explicitly along with `.venv/` and
 `__pycache__/` — it contains a live Groq key.
 
 The committed sample profiles under `profiles/` (`test.json`, `test1.json`,
-and so on) are harmless — nothing enumerates that directory for the browser —
-but they are dead weight and worth deleting.
+and so on) are harmless — the app no longer reads or writes that directory at
+all — but they are dead weight and worth deleting.
 
 ## 4. Diagnostics in production
 
@@ -98,11 +97,15 @@ shows the most recent measurement and the iteration it came from.
 
 - **Sessions do not survive a restart.** App Service recycles containers on
   deploy, on scale operations, and after idle timeout. Anyone mid-comparison
-  loses their unsaved model; saved profile files under `/home/data` persist.
+  loses their unsaved model, and the server holds no copy to recover it from.
   Tell users to save, or move the store off-process.
 - **Two Groq generations run synchronously per comparison.** Azure's front end
   drops connections idle for 230s, so a stalled provider surfaces as a 502.
-- **Profiles are user-held files.** The app never lists `profiles/` to the
-  browser; loading is an upload. That is intentional — it stops one person's
-  results being reachable by another — so the server-side directory is really
-  only a scratch/save area.
+- **Profiles are user-held files.** Saving is a download and loading is an
+  upload; the server keeps no copy and has no server-side profile directory.
+  That is intentional twice over — it stops one person's results being
+  reachable by another, and there is nowhere durable to write them anyway,
+  since the app directory is read-only and replaced on every redeploy.
+  Save opens a native "Save as" dialog on Chrome and Edge (File System
+  Access API); Firefox and Safari fall back to an ordinary download into the
+  browser's downloads folder.

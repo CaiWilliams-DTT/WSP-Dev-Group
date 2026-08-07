@@ -60,26 +60,12 @@ app.config.update(
 APP_TITLE = "SREA Dev Group"
 MAIN_SUBTITLE = "Active style preference learning"
 PROFILE_SCHEMA_VERSION = 1
-# Overridable because the deployed application directory is read-only under
-# WEBSITE_RUN_FROM_PACKAGE and is replaced wholesale on every redeploy. On
-# Azure point this at the persistent share, e.g. /home/data/profiles.
-PROFILES_DIR = os.environ.get("PROFILES_DIR") or os.path.join(BASE_DIR, "profiles")
 MIN_ANSWERED_FOR_EXPORT = 5
 # Profiles are uploaded from the user's own machine, so cap what we will
 # read. The Flask-level limit rejects the request outright (413, handled
 # below); the smaller one produces a friendly message for a plausible file.
 MAX_PROFILE_BYTES = 2 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
-
-# A read-only application directory must not take the whole app down at
-# import: everything except profile save/load still works, and those routes
-# already report OSError to the user as a flash.
-try:
-    os.makedirs(PROFILES_DIR, exist_ok=True)
-except OSError as _exc:
-    print(f"warning: profile directory {PROFILES_DIR} is not writable ({_exc}); "
-          f"saving profiles will fail. Set PROFILES_DIR to a writable path.",
-          file=sys.stderr)
 
 # Dev-only diagnostics (see dev_metrics.py). With the flag off the module
 # is never imported: the route is not registered (it 404s), no nav link
@@ -94,8 +80,9 @@ if DEV_METRICS:
 # The Flask session is a signed cookie: it can only hold small, JSON-
 # serialisable values. The model object and the numpy feature vectors are
 # neither, so they live here, in-process, keyed by a session id. Only that
-# id goes in the cookie. Durable persistence is handled by the profile
-# save/load routes below, which write JSON files under profiles/.
+# id goes in the cookie. This store is the ONLY copy the server holds, and
+# it is not durable — the profile save/load routes below hand the state to
+# the user as a file and take it back as an upload.
 #
 # IMPORTANT — this store is per-process and per-instance. The app must run
 # with a SINGLE gunicorn worker on a SINGLE instance: with more, requests
@@ -124,7 +111,7 @@ def _evict(protect=None):
     """Drop idle and surplus sessions. Caller must hold _STORE_LOCK.
 
     Unsaved work is lost when a session is dropped, which is the same
-    outcome as the app instance recycling — the profile files are the
+    outcome as the app instance recycling — the file the user saved is the
     durable copy. `protect` is the session being served right now, which
     must survive the sweep regardless.
     """
@@ -317,7 +304,18 @@ def top_ranking(state, limit=10):
 
 
 # =====================================================================
-# PROFILE PERSISTENCE (JSON files under profiles/, no pickling)
+# PROFILE PERSISTENCE (JSON files on the user's own machine, no pickling)
+#
+# A profile only ever lives where the user put it. Saving is a download and
+# loading is an upload; the server keeps no copy and has no list of them.
+# That is a deliberate pair of decisions, not an omission:
+#
+#   - This is a shared web app, so one person's results must never be
+#     discoverable — let alone loadable — by another.
+#   - There is nowhere durable to put one anyway. The application directory
+#     is read-only under WEBSITE_RUN_FROM_PACKAGE and is replaced wholesale
+#     on every redeploy, so a server-side write either fails outright or
+#     produces a file the user cannot reach and that the next deploy erases.
 # =====================================================================
 class ProfileError(ValueError):
     """User-facing profile failure; always surfaced as a flash, never a 500."""
@@ -328,14 +326,16 @@ def slugify(name):
         raise ProfileError("Profile name must contain at least one letter or digit.")
     return slug
 
-def profile_path(slug):
-    """Resolve a slug to a file path, refusing anything outside profiles/."""
+def profile_filename(slug):
+    """Filename to offer the browser for a profile download.
+
+    The slug is re-validated rather than trusted: it ends up in a
+    Content-Disposition header, where a stray quote, newline, or path
+    separator would let a crafted profile name steer where the file lands.
+    """
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,59}", slug or ""):
         raise ProfileError("Invalid profile identifier.")
-    path = os.path.abspath(os.path.join(PROFILES_DIR, slug + ".json"))
-    if os.path.dirname(path) != os.path.abspath(PROFILES_DIR):
-        raise ProfileError("Invalid profile identifier.")
-    return path
+    return slug + ".json"
 
 def serialize_state(state):
     data = {
@@ -357,13 +357,21 @@ def serialize_state(state):
         data["dev_metrics"] = state["metrics_raw"]
     return data
 
-def save_profile(state):
+def profile_download(state):
+    """Hand the profile to the browser as a file, and count it as saved.
+
+    Marking the state clean here is the honest thing to do even though the
+    server cannot observe where the bytes land: the response has left, and
+    the user's own machine is the system of record.
+    """
     data = serialize_state(state)
-    path = profile_path(state["profile_slug"])
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+    filename = profile_filename(state["profile_slug"])
     state["dirty"] = False
-    return data
+    return Response(
+        json.dumps(data, indent=2),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 def restore_state(data, api_key=None):
     """Rebuild session state from a profile file's contents.
@@ -410,12 +418,15 @@ def restore_state(data, api_key=None):
 @app.context_processor
 def inject_chrome():
     state = get_state()
+    slug = state.get("profile_slug")
     return {
         "app_title": APP_TITLE,
         "main_subtitle": MAIN_SUBTITLE,
         "active_profile": state.get("profile_name"),
         "unsaved_changes": bool(state.get("dirty")),
         "dev_metrics_enabled": DEV_METRICS,
+        # Suggested name for the browser's save dialog.
+        "profile_filename": (slug + ".json") if slug else "",
     }
 
 
@@ -466,43 +477,49 @@ def handle_action():
 
 @app.route("/profile/new", methods=["POST"])
 def profile_new():
+    """Start a fresh, empty profile. Nothing is written anywhere yet.
+
+    There is no name collision to check for: profiles are files on the
+    user's machine, so the browser's own save dialog is what tells them a
+    name is already taken, and only at the point it would overwrite one.
+    """
     name = (request.form.get("name") or "").strip()
     api_key = get_state().get("api_key")
     try:
         if not name:
             raise ProfileError("Enter a name for the new profile.")
         slug = slugify(name)
-        path = profile_path(slug)
-        if os.path.exists(path):
-            raise ProfileError(f'A profile called "{name}" already exists — '
-                               f'load it or pick another name.')
         state = new_state(api_key=api_key)
         state["profile_name"] = name
         state["profile_slug"] = slug
         replace_state(state)
-        save_profile(state)
     except ProfileError as exc:
         flash(str(exc), "error")
-    except OSError as exc:
-        flash(f"Could not write the profile file: {exc}", "error")
     else:
-        flash(f'Created profile "{name}".', "success")
+        flash(f'Created profile "{name}" — use Save to keep it as a file.',
+              "success")
     return redirect(url_for("index"))
 
 
-@app.route("/profile/save", methods=["POST"])
+@app.route("/profile/save", methods=["GET"])
 def profile_save():
+    """Download the active profile to the user's machine.
+
+    GET, not POST, because the response is a file rather than a state change
+    the page needs to reflect — the browser downloads it without navigating
+    away. The front end upgrades this to a native "Save as" dialog where the
+    File System Access API exists (see base.html); without JavaScript, or in
+    a browser that lacks it, this route on its own is the whole feature.
+    """
     state = get_state()
     if not state.get("profile_slug"):
         flash("No active profile — create one first.", "error")
         return redirect(url_for("index"))
     try:
-        save_profile(state)
-    except (ProfileError, OSError) as exc:
+        return profile_download(state)
+    except ProfileError as exc:
         flash(f"Save failed: {exc}", "error")
-    else:
-        flash(f'Saved profile "{state["profile_name"]}".', "success")
-    return redirect(url_for("index"))
+        return redirect(url_for("index"))
 
 
 @app.route("/profile/load", methods=["POST"])

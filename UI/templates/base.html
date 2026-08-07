@@ -51,10 +51,11 @@
                     <button type="submit" class="btn btn-sm">New</button>
                 </form>
 
-                <form action="{{ url_for('profile_save') }}" method="POST" class="inline-form">
+                <form action="{{ url_for('profile_save') }}" method="GET" class="inline-form"
+                      id="profile-save-form" data-filename="{{ profile_filename }}">
                     <button type="submit" class="btn btn-sm"
                             {% if not active_profile %}disabled title="Create a profile first"{% endif %}>
-                        Save
+                        Save profile…
                     </button>
                 </form>
             </div>
@@ -74,5 +75,70 @@
 
         {% block content %}{% endblock %}
     </main>
+
+    <script>
+    // Save profile: open a real "Save as" dialog so the user chooses where the
+    // file goes on their own machine.
+    //
+    // Progressive enhancement over the plain form. Without this the form still
+    // works — GET /profile/save returns the JSON as an attachment and the
+    // browser drops it in the downloads folder — so everything here is about
+    // upgrading that to a folder picker, and every failure path falls back to
+    // the download rather than leaving the button dead.
+    (function () {
+        var form = document.getElementById('profile-save-form');
+        if (!form) { return; }
+
+        // File System Access API: Chrome and Edge. Firefox and Safari get the
+        // plain download, which is why the handler bails before preventDefault.
+        if (typeof window.showSaveFilePicker !== 'function') { return; }
+
+        form.addEventListener('submit', async function (event) {
+            event.preventDefault();
+
+            var handle;
+            try {
+                // Must be the first thing awaited: the picker needs the click's
+                // user activation, and that is spent by an earlier await.
+                handle = await window.showSaveFilePicker({
+                    suggestedName: form.dataset.filename || 'profile.json',
+                    types: [{
+                        description: 'Style profile',
+                        accept: {'application/json': ['.json']}
+                    }]
+                });
+            } catch (err) {
+                if (err && err.name === 'AbortError') { return; }  // cancelled
+                form.submit();  // blocked (e.g. embedded) — fall back
+                return;
+            }
+
+            try {
+                var response = await fetch(form.action, {
+                    credentials: 'same-origin',
+                    headers: {'Accept': 'application/json'}
+                });
+                // A redirect back to the page means the server refused (no
+                // active profile). Navigate so its flash message is shown.
+                var type = response.headers.get('content-type') || '';
+                if (!response.ok || type.indexOf('application/json') === -1) {
+                    window.location.assign(form.action);
+                    return;
+                }
+                var writable = await handle.createWritable();
+                await writable.write(await response.blob());
+                await writable.close();
+            } catch (err) {
+                window.alert('Could not save the profile: ' +
+                             ((err && err.message) || err));
+                return;
+            }
+
+            // The save cleared the unsaved-changes flag server-side; reload so
+            // the badge in the header agrees.
+            window.location.reload();
+        });
+    })();
+    </script>
 </body>
 </html>
