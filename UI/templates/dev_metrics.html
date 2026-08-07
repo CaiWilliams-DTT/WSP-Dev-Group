@@ -107,8 +107,16 @@
     </div>
     <div class="stat-card">
         <div class="stat-label">LOO accuracy</div>
-        <div class="stat-value">{{ num(latest.loo_accuracy, 2) }}</div>
-        <div class="stat-sub">leave-one-out on answered comparisons</div>
+        <div class="stat-value">{{ num(payload.current.latest_loo.value if payload.current.latest_loo else none, 2) }}</div>
+        <div class="stat-sub">
+            leave-one-out on answered comparisons
+            {%- if payload.current.latest_loo %}, as at iteration
+            {{ payload.current.latest_loo.iteration }}
+            {%- if payload.current.latest_loo.iteration != latest.iteration %}
+            (sampled every {{ payload.current.loo_every_n }})
+            {%- endif -%}
+            {%- endif -%}
+        </div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Posterior health</div>

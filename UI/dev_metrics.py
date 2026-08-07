@@ -9,6 +9,7 @@ never registered, no nav link renders, and no collection or timing code
 runs anywhere in the request path.
 """
 import math
+import os
 import re
 from datetime import datetime, timezone
 
@@ -22,7 +23,21 @@ from LLM_API.llm_api import forget_client, has_default_key
 METRICS_SCHEMA_VERSION = 1
 RANK_HISTORY_N = 10         # rankings kept for Kendall-tau comparisons
 MC_SAMPLES = 500            # posterior draws for P(leader is truly top)
-LOO_MAX_COMPARISONS = 200   # leave-one-out is quadratic; stop beyond this
+# Leave-one-out is quadratic, so it is skipped entirely past this many
+# answered comparisons. The ceiling bounds the worst-case stall on the one
+# sampled click in LOO_EVERY_N: measured ~330ms at 40 comparisons, ~1.3s at
+# 80, ~5.1s at 160. Because the app runs a single worker (see UI/app.py),
+# that stall blocks every other user too, so lower it for a deployment with
+# real traffic — 80 keeps the worst click near a second.
+LOO_MAX_COMPARISONS = max(0, int(os.environ.get("DEV_METRICS_LOO_MAX", "200")))
+# Leave-one-out refits the learner once per answered comparison, so its cost
+# grows quadratically with session length. Measured on the comparison click
+# path it dominated everything else — ~60ms flat with metrics off, against
+# ~935ms at 60 comparisons with them on. Computing it every Nth outcome keeps
+# a usable accuracy curve at a fraction of the cost; the chart skips the gaps
+# and the summary tile reports the most recent value with its iteration.
+# Set DEV_METRICS_LOO_EVERY=1 to restore a value on every iteration.
+LOO_EVERY_N = max(1, int(os.environ.get("DEV_METRICS_LOO_EVERY", "10")))
 SIGMA_COND_LIMIT = 1e8      # condition number above this flags the posterior
 # Accept any plausible token: printable ASCII, no whitespace. Deliberately
 # not pinned to the current "gsk_" prefix, which is Groq's to change.
@@ -269,8 +284,14 @@ class MetricsCollector:
         answered = len(_answered(algo))
         skipped = len(algo.past_comparisons) - answered
 
+        # Sampled rather than computed every time — see LOO_EVERY_N. None
+        # means "not measured at this iteration", not "measurement failed";
+        # the chart filters those points out rather than plotting a gap.
+        iteration = len(self.snapshots) + 1
+        loo = _loo_accuracy(algo) if iteration % LOO_EVERY_N == 0 else None
+
         snapshot = {
-            "iteration": len(self.snapshots) + 1,
+            "iteration": iteration,
             "outcome": str(outcome).strip().upper(),
             "pair": [acq.get("a_id"), acq.get("b_id")],
             # convergence
@@ -289,7 +310,7 @@ class MetricsCollector:
             "p_top": _p_top(algo, top1),
             # model fit
             "log_likelihood": _finite_or_none(_log_likelihood(algo)),
-            "loo_accuracy": _loo_accuracy(algo),
+            "loo_accuracy": loo,
             "sigma_min_eig": min_eig,
             "sigma_cond": _finite_or_none(cond) if cond is not None else None,
             "sigma_ok": bool(min_eig > 0 and cond is not None and cond < SIGMA_COND_LIMIT),
@@ -343,6 +364,15 @@ def _build_payload():
     snapshots = collector.snapshots if collector else []
     latest = snapshots[-1] if snapshots else None
 
+    # LOO is sampled every LOO_EVERY_N iterations, so the newest snapshot
+    # usually carries none. Report the most recent real measurement and the
+    # iteration it came from, rather than blanking the tile between samples.
+    latest_loo = next(
+        ({"value": snap["loo_accuracy"], "iteration": snap["iteration"]}
+         for snap in reversed(snapshots) if snap.get("loo_accuracy") is not None),
+        None,
+    )
+
     counts = _appearance_counts(algo)
     order = np.argsort(-np.asarray(algo.scores), kind="stable")
     top_vectors = []
@@ -382,6 +412,8 @@ def _build_payload():
         "tau_vs_recent": tau_vs_recent,
         "current": {
             "latest": latest,
+            "latest_loo": latest_loo,
+            "loo_every_n": LOO_EVERY_N,
             "top_vectors": top_vectors,
             "coverage": {
                 "answered": answered,
